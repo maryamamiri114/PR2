@@ -8,20 +8,19 @@ Personalization in Question Answering (QA) requires answers that are both accura
 ## Requirements
 
 Install dependencies:
-
 ```bash
 pip install -r requirements.txt
-
+```
 
 Data Preparation
-Download LaMP-QA
+Download [LaMP-QA](https://github.com/LaMP-Benchmark/LaMP-QA?tab=readme-ov-file#downloading-the-dataset)
 First, you need to download the LaMP-QA dataset. For this purpose, you can use the following code:
 
 ```bash
 python download.py \
     --dataset_save_directory /path/to/download_directory \
     --cache_dir /path/to/cache_directory
-
+```
 
 Retrieval from User Profile
 
@@ -33,6 +32,7 @@ python retrieval.py \
     --output_dataset_addr /*address to where the dataset with sorted profile for each user should be saved*/ \
     --model_name "facebook/contriever-msmarco" \
     --batch_size 16
+```
 
 Running PR²
 
@@ -50,9 +50,10 @@ python PPP.py \
     --num_gpus <int> \
     --batch_size <int> \
     --llm_type <qwen|gemma>
+```
 
 Evaluation
 
-Please use the evaluation script provided by the LaMP-QA benchmark to evaluate generated responses.
+Please use the evaluation script provided by the [LaMP-QA benchmark](https://github.com/LaMP-Benchmark/LaMP-QA?tab=readme-ov-file#evaluating-the-generated-responses) to evaluate generated responses.
 
 

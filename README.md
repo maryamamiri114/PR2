@@ -5,16 +5,15 @@
 Personalization in Question Answering (QA) requires answers that are both accurate and aligned with users’ background, preferences, and historical context. Existing state-of-the-art methods primarily rely on retrieval-augmented generation (RAG) solutions that construct personal context by retrieving relevant items from the user’s profile. Existing methods use the user’s query directly to retrieve personal documents and such strategies often lead to surfacelevel personalization. We propose PR2 (Personalized Retrieval-Augmented Reasoning), a reinforcement learning framework that integrates reasoning and retrieval from personal context for personalization. PR2 learns adaptive retrieval-reasoning policies, determining when to retrieve, what evidence to retrieve from user profiles, and how to incorporate it into intermediate reasoning steps. By optimizing multi-turn reasoning trajectories under a personalized reward function, the framework reinforces reasoning paths that better align with user-specific preferences and contextual signals reflected by the reward model. Extensive experiments on the LaMP-QA benchmark using three LLMs show that PR2 consistently outperforms strong baselines, achieving an average relative improvement of 8.8%-12% in personalized QA.
 
 
-## Requirements
+## Installing requirements
 
 Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-Data Preparation
-Download [LaMP-QA](https://github.com/LaMP-Benchmark/LaMP-QA?tab=readme-ov-file#downloading-the-dataset)
-First, you need to download the LaMP-QA dataset. For this purpose, you can use the following code:
+## Data Preparation
+You need to download the [LaMP-QA](https://github.com/LaMP-Benchmark/LaMP-QA?tab=readme-ov-file#downloading-the-dataset) dataset. For this purpose, you can use the following code:
 
 ```bash
 python download.py \
@@ -22,9 +21,9 @@ python download.py \
     --cache_dir /path/to/cache_directory
 ```
 
-Retrieval from User Profile
+## Retrieval from User Profile
 
-Next, in order to prepare the RAG personalization on the client-side, we need to rank the dataset for each query and prepare it in a format that is usable for  . To do this, you can use the following code:
+Next, in order to prepare the RAG personalization on the client-side:
 
 ```bash
 python retrieval.py \
@@ -34,7 +33,7 @@ python retrieval.py \
     --batch_size 16
 ```
 
-Running PR²
+## Running PR²
 
 ```bash
 python PPP.py \
@@ -52,7 +51,7 @@ python PPP.py \
     --llm_type <qwen|gemma>
 ```
 
-Evaluation
+## Evaluation
 
 Please use the evaluation script provided by the [LaMP-QA benchmark](https://github.com/LaMP-Benchmark/LaMP-QA?tab=readme-ov-file#evaluating-the-generated-responses) to evaluate generated responses.
 

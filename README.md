@@ -40,7 +40,8 @@ python PR2.py \
     --questions_address /path/to/prepared_dataset.jsonl \
     --output_address /path/to/output_directory \
     --model <qwen|gemma> \
-    --judge-model <judge>
+    --temperature <temp> \
+    --judge-model <judge> \
     --split test \
     --subsets ALL \
     --max-model-len <max_len>

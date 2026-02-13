@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pr2.py - Main script for personalized RAG training
+pr2.py
 Coordinates vLLM engines, data loading, judging, and training
 """
 

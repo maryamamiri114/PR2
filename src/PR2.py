@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pr2.py
-Coordinates vLLM engines, data loading, judging, and training
+pr2.py - Main script 
+Coordinates vLLM engines, judging, and training orchestration
 """
 
 import os, re, json, argparse, sys
@@ -22,12 +22,6 @@ try:
 except Exception:
     _HAS_OPENAI = False
 
-_HAS_DATASETS = True
-try:
-    from datasets import load_dataset, concatenate_datasets
-except Exception:
-    _HAS_DATASETS = False
-
 _HAS_TRANSFORMERS = True
 try:
     from transformers import AutoTokenizer
@@ -35,39 +29,9 @@ except Exception:
     _HAS_TRANSFORMERS = False
 
 # Import from other modules
-from retrieval import (
-    build_snippets, PerExampleRetriever, get_tag, _iter_fields
-)
+from retrieval import get_tag
 from training import train_trl_grpo_stacked
-
-
-# ============================================================================
-# Instruction templates
-# ============================================================================
-INSTRUCTION_TEMPLATE = """
-Your task is to generate a personalized response to the user's question based on the required personalization aspects in the question.
-You may think in <think>...</think>, search in <search>...</search>, read <information>...</information>, and answer in <answer>...</answer>.
-After reading <information>, reflect whether you have enough to personalize the answer and show that reflection in <think>...</think>.
-The final answer MUST be inside <answer>...</answer>. Produce no text outside tags.
-""".strip()
-
-
-ANS_FORMAT_HEADER = (
-    "Your task is to generate a personalized response to the user's question. "
-    "To do this, you can perform a series of actions, including thinking in <think> and </think> tags, "
-    "searching for information from the user's past interactions with the system (i.e., previously asked questions "
-    "and detailed information needs) by generating a search query in <search> and </search> tags, "
-    "and finally providing the answer in <answer> and </answer> tags. "
-    "The retrieved information from user history will be provided to you inside <information> and </information> tags. "
-    "You need to first think about the question and how to generate a personalized answer for the user. "
-    "In this thinking process, you should try to understand the user's preferences and needs based on their past interactions with the system. "
-    "The thinking process should be inside <think> and </think> tags, and the final answer should be inside <answer> and </answer> tags. "
-    "If you need to search for information about the user from their history, you can do this by generating a non-empty search query inside <search> and </search> tags. "
-    "The retrieved information will be provided to you inside <information> and </information> tags. "
-    "You can use this information in the thinking process and answer generation. "
-    "Nothing should be outside the mentioned tags except the initial question provided to you. "
-    "Now, answer the following question:\n"
-).strip()
+from data_prep import prepare_stacked_prompts
 
 
 # ============================================================================
@@ -139,245 +103,6 @@ def _maybe_apply_chat_template(llm: "LLM", system_text: str, user_text: str) -> 
         except Exception:
             pass
     return f"{system_text}\n\n{user_text}"
-
-
-def call_llm(llm: "LLM",
-             system_text: str,
-             user_text: str,
-             temperature: float = 0.7,
-             max_tokens: int = 256,
-             top_p: float = 0.95,
-             stop: Optional[List[str]] = None) -> str:
-    """Call vLLM engine for text generation."""
-    formatted = _maybe_apply_chat_template(llm, system_text, user_text)
-    sampling = SamplingParams(temperature=temperature, max_tokens=max_tokens, top_p=top_p, stop=stop or [])
-    outs = llm.generate([formatted], sampling)
-    return outs[0].outputs[0].text.strip()
-
-
-# ============================================================================
-# Controller for 2-step RAG
-# ============================================================================
-class Controller2Step:
-    """
-    Two-step RAG controller:
-    1. Planning: Think + generate search query
-    2. Retrieval + Answer: Get info + generate final answer
-    """
-    
-    def __init__(self, llm: "LLM", template: str,
-                 temperature: float = 0.7, top_p: float = 0.95,
-                 topk_default: int = 3):
-        self.llm = llm
-        self.template = template
-        self.temperature = temperature
-        self.top_p = top_p
-        self.topk_default = topk_default
-
-    def _format_info_block(self, items: List[tuple]) -> str:
-        """Format retrieved snippets as numbered list."""
-        if not items:
-            return ""
-        return "\n".join(
-            f"[{i}] ({snip.source}, score={score:.3f}) {snip.text}"
-            for i, (snip, score) in enumerate(items, 1)
-        )
-
-    def build_training_prompt(self, question: str, retriever: PerExampleRetriever, topk: int = None) -> str:
-        """
-        Build a complete training prompt with embedded retrieval.
-        For training, we retrieve once and embed the results directly in the prompt.
-        """
-        topk = topk or self.topk_default
-        
-        # Retrieve information
-        hits = retriever.search(question, k=topk) if question else []
-        
-        # Guarantee something in <information> if we have any snippets
-        if (not hits) and getattr(retriever, "snippets", None):
-            take = min(topk, len(retriever.snippets))
-            hits = [(retriever.snippets[i], 0.0) for i in range(take)]
-        
-        info_block = self._format_info_block(hits)
-        
-        # Build complete prompt
-        prompt = (
-            f"{ANS_FORMAT_HEADER}\n\n"
-            f"Question:\n{question}\n\n"
-            f"<information>\n{info_block}\n</information>\n\n"
-            "(Answering)"
-        )
-        
-        return prompt
-
-
-# ============================================================================
-# Data loading
-# ============================================================================
-def _normalize_hf_configs(cfg):
-    """Normalize config input to list of strings."""
-    if isinstance(cfg, (list, tuple)):
-        return [str(x) for x in cfg]
-    if isinstance(cfg, str):
-        return [c for c in re.split(r"[,\s]+", cfg.strip()) if c]
-    return [str(cfg)]
-
-
-def load_default_dataset(config, split: str, n: Optional[int]) -> List[Dict[str, Any]]:
-    """Load dataset from HuggingFace."""
-    assert _HAS_DATASETS, "Install datasets or provide --input-jsonl"
-
-    configs = _normalize_hf_configs(config)
-    if not configs:
-        raise ValueError("No valid --hf-config provided.")
-
-    parts = [load_dataset("alireza7/LaMP-QA", name=c, split=split) for c in configs]
-    ds = parts[0] if len(parts) == 1 else concatenate_datasets(parts)
-
-    if n is not None and n >= 0:
-        ds = ds.select(range(min(n, len(ds))))
-    return list(ds)
-
-
-def load_input_jsonl(path: str, n: Optional[int]) -> List[Dict[str, Any]]:
-    """Load data from JSONL file."""
-    rows = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
-            if n is not None and n >= 0 and len(rows) >= n:
-                break
-    return rows
-
-
-# ============================================================================
-# Prompt preparation
-# ============================================================================
-def prepare_stacked_prompts(args) -> List[Dict[str, Any]]:
-    """
-    Prepare training prompts: K RAG + 1 Vanilla per question.
-    
-    Returns:
-        List of dicts with: prompt, group_id, mode, question, details, aspects
-    """
-    # Load data
-    if args.input_jsonl and os.path.exists(args.input_jsonl):
-        data = load_input_jsonl(args.input_jsonl, args.n)
-
-        # Check if this is already precomputed prompts
-        if data and all(isinstance(r, dict) and "prompt" in r for r in data):
-            print(f"[STACK] Loaded {len(data)} precomputed prompts from {args.input_jsonl}", file=sys.stderr)
-            return data
-
-        # Normalize question field
-        for r in data:
-            if "question" not in r and "prompt" in r:
-                r["question"] = r.get("prompt", "")
-    else:
-        data = load_default_dataset(args.hf_config, args.hf_split, args.n)
-
-    # Build planner LLM
-    def _mk():
-        return _init_llm_core(
-            model=args.planner_model,
-            dtype=args.planner_dtype or args.dtype,
-            tensor_parallel_size=args.planner_tensor_parallel_size or args.tensor_parallel_size,
-            max_model_len=args.planner_max_model_len or args.max_model_len,
-            gpu_memory_utilization=(
-                args.planner_gpu_mem
-                if args.planner_gpu_mem is not None
-                else (args.gpu_mem if args.gpu_mem is not None else 0.90)
-            ),
-        )
-
-    planner_llm = _with_visible_devices(args.planner_devices, _mk)
-    ctl = Controller2Step(
-        planner_llm,
-        INSTRUCTION_TEMPLATE,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        topk_default=args.topk,
-    )
-
-    sources = [s.strip() for s in (args.sources or "").split(",") if s.strip()] or ["profile"]
-    prepared: List[Dict[str, Any]] = []
-
-    for idx, rec in enumerate(data):
-        qid = str(rec.get("id", idx))
-        question = (rec.get("question", "") or rec.get("prompt", "")).strip()
-
-        # Extract metadata
-        def _get_details(r: Dict[str, Any]) -> str:
-            for key in ("details", "detail", "detailed_explanation", "description"):
-                val = r.get(key)
-                if isinstance(val, str) and val.strip():
-                    return val.strip()
-            hist = " ".join(list(_iter_fields(r, "history") or [])) or ""
-            if hist.strip():
-                return hist.strip()
-            prof = " ".join(list(_iter_fields(r, "profile") or [])) or ""
-            if prof.strip():
-                return prof.strip()
-            return ""
-
-        def _get_aspects(r: Dict[str, Any], fallback_q: str):
-            aspects = r.get("aspects")
-            if isinstance(aspects, list) and aspects and all(isinstance(x, dict) for x in aspects):
-                return [
-                    {
-                        "aspect": str(x.get("aspect", "")),
-                        "reason": str(x.get("reason", "")),
-                        "evidence": str(x.get("evidence", "")),
-                    }
-                    for x in aspects
-                ]
-            return [{"aspect": "Answer relevance", "reason": "", "evidence": fallback_q}]
-
-        details = _get_details(rec)
-        aspects = _get_aspects(rec, question)
-
-        # Build retriever
-        snippets = build_snippets(rec, sources=sources)
-        retr = PerExampleRetriever(snippets)
-
-        # Generate K RAG prompts
-        for _ in range(max(1, args.rag_per_q)):
-            rag_prompt = ctl.build_training_prompt(question, retriever=retr, topk=args.topk)
-            prepared.append({
-                "group_id": qid,
-                "mode": "rag",
-                "prompt": rag_prompt,
-                "question": question,
-                "details": details,
-                "aspects": aspects,
-            })
-
-        # Generate 1 Vanilla prompt
-        for _ in range(max(1, args.van_per_q)):
-            vanilla_prompt = (
-                f"{ANS_FORMAT_HEADER}\n\n"
-                f"Question:\n{question}\n\n"
-                "(Answering)"
-            )
-            prepared.append({
-                "group_id": qid,
-                "mode": "van",
-                "prompt": vanilla_prompt,
-                "question": question,
-                "details": details,
-                "aspects": aspects,
-            })
-
-        print(
-            f"[STACK] {idx+1}/{len(data)} qid={qid} "
-            f"({args.rag_per_q}x RAG + {args.van_per_q}x VAN)",
-            file=sys.stderr,
-        )
-
-    return prepared
 
 
 # ============================================================================
@@ -776,7 +501,7 @@ def build_arg_parser():
     ap.add_argument("--planner-max-model-len", type=int, default=None)
     ap.add_argument("--planner-gpu-mem", type=float, default=None)
     ap.add_argument("--planner-devices", type=str, default=None)
-    ap.add_argument("--topk", type=int, default=2)
+    ap.add_argument("--topk", type=int, default=3)
 
     # Policy / TRL
     ap.add_argument("--trl-train", action="store_true")
@@ -788,13 +513,13 @@ def build_arg_parser():
     ap.add_argument("--trl-max-new-tokens", type=int, default=96)
 
     # Sampling
-    ap.add_argument("--temperature", type=float, default=0.9)
+    ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--top-p", type=float, default=0.95)
 
     # Compute
     ap.add_argument("--dtype", type=str, default="bfloat16")
     ap.add_argument("--tensor-parallel-size", type=int, default=1)
-    ap.add_argument("--max-model-len", type=int, default=4096)
+    ap.add_argument("--max-model-len", type=int, default=2048)
     ap.add_argument("--gpu-mem", type=float, default=0.78)
     ap.add_argument("--log-every", type=int, default=1)
     ap.add_argument("--lr", type=float, default=1e-6)
@@ -843,7 +568,7 @@ def main():
         if not args.trl_train:
             raise AssertionError("Pass --trl-train to start training")
         
-        # Prepare prompts
+        # Prepare prompts (handles vLLM planner internally if needed)
         prepared = prepare_stacked_prompts(args)
         
         # Train

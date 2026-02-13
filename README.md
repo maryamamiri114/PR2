@@ -36,19 +36,12 @@ python retrieval.py \
 ## Running PR²
 
 ```bash
-python PPP.py \
+python PR2.py \
     --questions_address /path/to/prepared_dataset.jsonl \
-    --output_address /path/to/output_directory \
-    --cloud_model <cloud_model_id> \
-    --local_model <local_model_id> \
-    --k_draft <int> \
-    --tau <float> \
-    --num_contexts <int> \
-    --max_gen_tokens_cloud <int> \
-    --max_gen_tokens_local <int> \
-    --num_gpus <int> \
-    --batch_size <int> \
-    --llm_type <qwen|gemma>
+    --output_address /path/to/output_directory \  --model <qwen|gemma> \
+    --split test \
+    --subsets ALL \
+    --max-model-len max_len
 ```
 
 ## Evaluation

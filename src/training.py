@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-training.py - TRL GRPO training
+training.py - TRL GRPO training with normalized advantages and structural penalties
 """
 
 import os, sys, math, time, json
